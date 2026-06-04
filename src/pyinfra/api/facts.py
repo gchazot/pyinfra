@@ -122,6 +122,93 @@ class FactBase(Generic[T]):
     def process_pipeline(self, args, output):
         return {arg: self.process([output[i]]) for i, arg in enumerate(args)}
 
+    def execute(
+        self,
+        fact_kwargs: dict[Any, Any] | dict[str, Any],
+        global_kwargs: AllArguments,
+        host: Host,
+        name: str,
+        state: State,
+    ) -> tuple[CommandOutput, bool]:
+        command = _make_command(self.command, fact_kwargs)
+        requires_command = _make_command(self.requires_command, fact_kwargs)
+        if requires_command:
+            command = StringCommand(
+                # If binary exists → run the fact command; otherwise emit the sentinel so
+                # pyinfra can distinguish "binary absent" from "no output".
+                "if",
+                "command",
+                "-v",
+                requires_command,
+                ">/dev/null",
+                "2>&1;",
+                "then",
+                "(",
+                command,
+                ");",
+                "else",
+                "echo",
+                f"'{_MISSING_COMMAND_MARKER}';",
+                "fi",
+            )
+
+        status = False
+        output = CommandOutput([])
+
+        executor_kwargs = {
+            key: value for key, value in global_kwargs.items() if key in CONNECTOR_ARGUMENT_KEYS
+        }
+
+        if executor_kwargs.get("_su_user"):
+            command = StringCommand("printf", QuoteString(_SU_OUTPUT_MARKER), "&&", command)
+
+        try:
+            status, output = host.run_shell_command(
+                command,
+                print_output=state.print_fact_output,
+                print_input=state.print_fact_input,
+                **executor_kwargs,
+            )
+        except (TimeoutError, OSError, SSHException) as e:
+            log_host_command_error(
+                host,
+                e,
+                timeout=global_kwargs.get("_timeout"),
+            )
+
+        if executor_kwargs.get("_su_user"):
+            for index, line in enumerate(output.stdout_lines):
+                if _SU_OUTPUT_MARKER in line:
+                    stdout_lines = output.stdout_lines[index:].copy()
+                    stdout_lines[0] = line.split(_SU_OUTPUT_MARKER, 1)[1]
+                    break
+
+        # Detect the "binary absent" sentinel from the if/then/else shell guard.
+        if status and output.stdout_lines == [_MISSING_COMMAND_MARKER]:
+            cmd_str = str(requires_command) if requires_command else ""
+            logger.debug(
+                "Skipping fact %s on %s: command not found: %s",
+                name,
+                host.print_prefix,
+                cmd_str,
+            )
+            raise MissingCommandError(cmd_str)
+
+        if not status and output.stderr_lines:
+            # If we have error output and that error is sudo or su stating the user
+            # does not exist, do not fail but instead return the default fact value.
+            # This allows for users that don't currently but may be created during
+            # other operations.
+            first_line = output.stderr_lines[0]
+            if executor_kwargs.get("_sudo_user") and re.match(SUDO_REGEX, first_line):
+                status = True
+            if executor_kwargs.get("_su_user") and any(
+                re.match(regex, first_line) for regex in SU_REGEXES
+            ):
+                status = True
+
+        return output, status
+
 
 class ShortFactBase(Generic[T]):
     name: str
@@ -294,14 +381,13 @@ def _get_fact(
         global_kwargs["_shell_executable"] = fact.shell_executable
 
     # Check preconditions before running this fact's command. The fact's own arguments go
-    # with it, minus the `self` that `getcallargs` collected alongside them — `_make_command`
-    # drops it the same way before calling `command`.
-    precondition_kwargs = {key: value for key, value in fact_kwargs.items() if key != "self"}
+        # with it, minus the `self` that `getcallargs` collected alongside them — `_make_command`
+        # drops it the same way before calling `command`.
+        precondition_kwargs = {key: value for key, value in fact_kwargs.items() if key != "self"}
     if reason := fact.check_preconditions(state, host, **precondition_kwargs):
         raise FactPreconditionError(cls, reason)
 
-    output, status = execute_fact_shell_command(
-        fact,
+    output, status = fact.execute(
         fact_kwargs,
         global_kwargs,
         host,
@@ -351,91 +437,3 @@ def _get_fact(
         state.fail_hosts({host})
 
     return data
-
-
-def execute_fact_shell_command(
-    fact: FactBase,
-    fact_kwargs: dict[Any, Any] | dict[str, Any],
-    global_kwargs: AllArguments,
-    host: Host,
-    name: str,
-    state: State,
-) -> tuple[CommandOutput, bool]:
-    command = _make_command(fact.command, fact_kwargs)
-    requires_command = _make_command(fact.requires_command, fact_kwargs)
-    if requires_command:
-        command = StringCommand(
-            # If binary exists → run the fact command; otherwise emit the sentinel so
-            # pyinfra can distinguish "binary absent" from "no output".
-            "if",
-            "command",
-            "-v",
-            requires_command,
-            ">/dev/null",
-            "2>&1;",
-            "then",
-            "(",
-            command,
-            ");",
-            "else",
-            "echo",
-            f"'{_MISSING_COMMAND_MARKER}';",
-            "fi",
-        )
-
-    status = False
-    output = CommandOutput([])
-
-    executor_kwargs = {
-        key: value for key, value in global_kwargs.items() if key in CONNECTOR_ARGUMENT_KEYS
-    }
-
-    if executor_kwargs.get("_su_user"):
-        command = StringCommand("printf", QuoteString(_SU_OUTPUT_MARKER), "&&", command)
-
-    try:
-        status, output = host.run_shell_command(
-            command,
-            print_output=state.print_fact_output,
-            print_input=state.print_fact_input,
-            **executor_kwargs,
-        )
-    except (TimeoutError, OSError, SSHException) as e:
-        log_host_command_error(
-            host,
-            e,
-            timeout=global_kwargs.get("_timeout"),
-        )
-
-    if executor_kwargs.get("_su_user"):
-        for index, line in enumerate(output.stdout_lines):
-            if _SU_OUTPUT_MARKER in line:
-                stdout_lines = output.stdout_lines[index:].copy()
-                stdout_lines[0] = line.split(_SU_OUTPUT_MARKER, 1)[1]
-                break
-
-    # Detect the "binary absent" sentinel from the if/then/else shell guard.
-    if status and output.stdout_lines == [_MISSING_COMMAND_MARKER]:
-        cmd_str = str(requires_command) if requires_command else ""
-        logger.debug(
-            "Skipping fact %s on %s: command not found: %s",
-            name,
-            host.print_prefix,
-            cmd_str,
-        )
-        raise MissingCommandError(cmd_str)
-
-    if not status and output.stderr_lines:
-        # If we have error output and that error is sudo or su stating the user
-        # does not exist, do not fail but instead return the default fact value.
-        # This allows for users that don't currently but may be created during
-        # other operations.
-        first_line = output.stderr_lines[0]
-        if executor_kwargs.get("_sudo_user") and re.match(SUDO_REGEX, first_line):
-            status = True
-        if executor_kwargs.get("_su_user") and any(
-            re.match(regex, first_line) for regex in SU_REGEXES
-        ):
-            status = True
-
-    return output, status
