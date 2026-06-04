@@ -35,8 +35,7 @@ from pyinfra.connectors.util import CommandOutput
 from pyinfra.context import ctx_host, ctx_state
 from pyinfra.progress import progress_spinner
 
-from .arguments import CONNECTOR_ARGUMENT_KEYS
-
+from .arguments import CONNECTOR_ARGUMENT_KEYS, AllArguments
 if TYPE_CHECKING:
     from pyinfra.api import Host, State
 
@@ -301,6 +300,67 @@ def _get_fact(
     if reason := fact.check_preconditions(state, host, **precondition_kwargs):
         raise FactPreconditionError(cls, reason)
 
+    output, status = execute_fact_shell_command(
+        fact,
+        fact_kwargs,
+        global_kwargs,
+        host,
+        name,
+        state,
+    )
+
+    data = fact.default()
+
+    if status:
+        if output.stdout_lines:
+            try:
+                data = fact.process(output.stdout_lines)
+            except FactProcessError as e:
+                log_error_or_warning(
+                    host,
+                    global_kwargs["_ignore_errors"],
+                    description=(f"could not process fact: {name} {get_kwargs_str(fact_kwargs)}"),
+                    exception=e,
+                )
+
+                # Check we've not failed
+                if apply_failed_hosts and not global_kwargs["_ignore_errors"]:
+                    state.fail_hosts({host})
+
+    if status:
+        log_message = "{}{}".format(
+            host.print_prefix,
+            f"Loaded fact {format_text(name, bold=True)}{f' ({get_kwargs_str(kwargs)})' if kwargs else ''}",
+        )
+        if state.print_fact_info:
+            logger.info(log_message)
+        else:
+            logger.debug(log_message)
+    else:
+        if not state.print_fact_output:
+            print_host_combined_output(host, output)
+
+        log_error_or_warning(
+            host,
+            global_kwargs["_ignore_errors"],
+            description=(f"could not load fact: {name} {get_kwargs_str(fact_kwargs)}"),
+        )
+
+    # Check we've not failed
+    if apply_failed_hosts and not status and not global_kwargs["_ignore_errors"]:
+        state.fail_hosts({host})
+
+    return data
+
+
+def execute_fact_shell_command(
+    fact: FactBase,
+    fact_kwargs: dict[Any, Any] | dict[str, Any],
+    global_kwargs: AllArguments,
+    host: Host,
+    name: str,
+    state: State,
+) -> tuple[CommandOutput, bool]:
     command = _make_command(fact.command, fact_kwargs)
     requires_command = _make_command(fact.requires_command, fact_kwargs)
     if requires_command:
@@ -347,16 +407,15 @@ def _get_fact(
             timeout=global_kwargs.get("_timeout"),
         )
 
-    stdout_lines, stderr_lines = output.stdout_lines, output.stderr_lines
     if executor_kwargs.get("_su_user"):
-        for index, line in enumerate(stdout_lines):
+        for index, line in enumerate(output.stdout_lines):
             if _SU_OUTPUT_MARKER in line:
-                stdout_lines = stdout_lines[index:].copy()
+                stdout_lines = output.stdout_lines[index:].copy()
                 stdout_lines[0] = line.split(_SU_OUTPUT_MARKER, 1)[1]
                 break
 
     # Detect the "binary absent" sentinel from the if/then/else shell guard.
-    if status and stdout_lines == [_MISSING_COMMAND_MARKER]:
+    if status and output.stdout_lines == [_MISSING_COMMAND_MARKER]:
         cmd_str = str(requires_command) if requires_command else ""
         logger.debug(
             "Skipping fact %s on %s: command not found: %s",
@@ -366,30 +425,12 @@ def _get_fact(
         )
         raise MissingCommandError(cmd_str)
 
-    data = fact.default()
-
-    if status:
-        if stdout_lines:
-            try:
-                data = fact.process(stdout_lines)
-            except FactProcessError as e:
-                log_error_or_warning(
-                    host,
-                    global_kwargs["_ignore_errors"],
-                    description=(f"could not process fact: {name} {get_kwargs_str(fact_kwargs)}"),
-                    exception=e,
-                )
-
-                # Check we've not failed
-                if apply_failed_hosts and not global_kwargs["_ignore_errors"]:
-                    state.fail_hosts({host})
-
-    elif stderr_lines:
+    if not status and output.stderr_lines:
         # If we have error output and that error is sudo or su stating the user
         # does not exist, do not fail but instead return the default fact value.
         # This allows for users that don't currently but may be created during
         # other operations.
-        first_line = stderr_lines[0]
+        first_line = output.stderr_lines[0]
         if executor_kwargs.get("_sudo_user") and re.match(SUDO_REGEX, first_line):
             status = True
         if executor_kwargs.get("_su_user") and any(
@@ -397,27 +438,4 @@ def _get_fact(
         ):
             status = True
 
-    if status:
-        log_message = "{}{}".format(
-            host.print_prefix,
-            f"Loaded fact {format_text(name, bold=True)}{f' ({get_kwargs_str(kwargs)})' if kwargs else ''}",
-        )
-        if state.print_fact_info:
-            logger.info(log_message)
-        else:
-            logger.debug(log_message)
-    else:
-        if not state.print_fact_output:
-            print_host_combined_output(host, output)
-
-        log_error_or_warning(
-            host,
-            global_kwargs["_ignore_errors"],
-            description=(f"could not load fact: {name} {get_kwargs_str(fact_kwargs)}"),
-        )
-
-    # Check we've not failed
-    if apply_failed_hosts and not status and not global_kwargs["_ignore_errors"]:
-        state.fail_hosts({host})
-
-    return data
+    return output, status
