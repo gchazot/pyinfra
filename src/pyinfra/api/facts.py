@@ -79,7 +79,6 @@ class FactCore(Generic[T]):
         host: Host,
         args: list | None = None,
         kwargs: dict | None = None,
-        ensure_hosts: Any | None = None,
         apply_failed_hosts: bool = True,
     ) -> T:
         raise NotImplementedError
@@ -237,7 +236,6 @@ class FactBase(FactCore[T]):
         host: Host,
         args: list | None = None,
         kwargs: dict | None = None,
-        ensure_hosts: Any | None = None,
         apply_failed_hosts: bool = True,
     ) -> T:
         try:
@@ -246,7 +244,6 @@ class FactBase(FactCore[T]):
                 host,
                 args,
                 kwargs,
-                ensure_hosts,
                 apply_failed_hosts,
             )
         except MissingCommandError as e:
@@ -292,7 +289,6 @@ class FactBase(FactCore[T]):
         host: Host,
         args: list | None = None,
         kwargs: dict | None = None,
-        ensure_hosts: Any | None = None,
         apply_failed_hosts: bool = True,
     ) -> T:
         fact = cls()
@@ -302,10 +298,9 @@ class FactBase(FactCore[T]):
 
         kwargs_str = get_kwargs_str(fact_kwargs)
         logger.debug(
-            "Getting fact: %s (%s) (ensure_hosts: %r)",
+            "Getting fact: %s (%s)",
             name,
             kwargs_str,
-            ensure_hosts,
         )
 
         if not host.connected:
@@ -397,10 +392,9 @@ class ShortFactBase(FactCore[T]):
         host: Host,
         args: list | None = None,
         kwargs: dict | None = None,
-        ensure_hosts: Any | None = None,
         apply_failed_hosts: bool = True,
     ) -> T:
-        fact_data = cls.fact.get(state, host, args, kwargs, ensure_hosts, apply_failed_hosts)
+        fact_data = cls.fact.get(state, host, args, kwargs, apply_failed_hosts)
         return cls().process_data(fact_data)
 
     def process_data(self, data):
