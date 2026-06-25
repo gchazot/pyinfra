@@ -18,7 +18,7 @@ from collections.abc import Callable
 
 import gevent
 from paramiko import SSHException
-from typing_extensions import override
+from typing_extensions import ParamSpec, override
 
 from pyinfra import logger
 from pyinfra.api.output import format_text
@@ -84,7 +84,79 @@ class FactCore(Generic[T]):
         raise NotImplementedError
 
 
+P = ParamSpec("P")
+
+
+class DefaultMarker:
+    pass
+
+
+_DEFAULT_MARKER = DefaultMarker()
+
+
+def fact(
+    default_value: T | DefaultMarker = _DEFAULT_MARKER,
+) -> Callable[[Callable[P, T]], FactCore[T]]:
+    """
+    Decorator that takes a simple module function and turn it into the internal
+    fact representation that consists of an object implementing FactCore interface.
+    """
+
+    def decorator(fact_func: Callable[P, T]) -> FactCore[T]:
+        class DecoratedFact(FactCore[T]):
+            abstract = False
+
+            @override
+            @staticmethod
+            def default() -> T:
+                if default_value is _DEFAULT_MARKER:
+                    return cast(T, default_value)
+                else:
+                    return FactCore[T].default()
+
+            @override
+            @classmethod
+            def get(
+                cls,
+                state: State,
+                host: Host,
+                args: list | None = None,
+                kwargs: dict | None = None,
+                apply_failed_hosts: bool = True,
+            ) -> T:
+                sig = inspect.signature(fact_func)
+                parameters = sig.parameters
+
+                if kwargs is None:
+                    call_kwargs = {}
+                else:
+                    call_kwargs = kwargs.copy()
+
+                if "state" in parameters:
+                    call_kwargs["state"] = state
+
+                if "host" in parameters:
+                    call_kwargs["host"] = host
+
+                if args is None:
+                    args = []
+
+                bound_arguments = sig.bind(*args, **call_kwargs)
+                return fact_func(*bound_arguments.args, **bound_arguments.kwargs)
+
+        DecoratedFact.name = fact_func.__name__
+        DecoratedFact.__doc__ = fact_func.__doc__
+
+        return DecoratedFact()
+
+    return decorator
+
+
 class FactBase(FactCore[T]):
+    """
+    Base class for all shell-commands-based facts.
+    """
+
     shell_executable: str | None = None
 
     command: Callable[..., str | StringCommand]
