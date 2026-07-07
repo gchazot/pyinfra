@@ -127,21 +127,52 @@ def fact(
                 sig = inspect.signature(fact_func)
                 parameters = sig.parameters
 
+                if args is None:
+                    call_args = []
+                else:
+                    call_args = list(args)
+
                 if kwargs is None:
                     call_kwargs = {}
                 else:
                     call_kwargs = kwargs.copy()
 
+                    if "state" in call_kwargs:
+                        raise TypeError("state cannot be provided as a keyword argument")
+                    if "host" in call_kwargs:
+                        raise TypeError("host cannot be provided as a keyword argument")
+
+                def is_positional(param: inspect.Parameter) -> bool:
+                    return param.kind in (
+                        inspect.Parameter.POSITIONAL_ONLY,
+                        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                    )
+
                 if "state" in parameters:
-                    call_kwargs["state"] = state
+                    if is_positional(parameters["state"]):
+                        positional_parameters = [
+                            name
+                            for name, candidate in parameters.items()
+                            if is_positional(candidate)
+                        ]
+                        position = positional_parameters.index("state")
+                        call_args.insert(position, state)
+                    else:
+                        call_kwargs["state"] = state
 
                 if "host" in parameters:
-                    call_kwargs["host"] = host
+                    if is_positional(parameters["host"]):
+                        positional_parameters = [
+                            name
+                            for name, candidate in parameters.items()
+                            if is_positional(candidate)
+                        ]
+                        position = positional_parameters.index("host")
+                        call_args.insert(position, host)
+                    else:
+                        call_kwargs["host"] = host
 
-                if args is None:
-                    args = []
-
-                bound_arguments = sig.bind(*args, **call_kwargs)
+                bound_arguments = sig.bind(*call_args, **call_kwargs)
                 return fact_func(*bound_arguments.args, **bound_arguments.kwargs)
 
         DecoratedFact.name = fact_func.__name__
