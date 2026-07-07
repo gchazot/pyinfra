@@ -109,10 +109,10 @@ def fact(
             @override
             @staticmethod
             def default() -> T:
-                if default_value is _DEFAULT_MARKER:
-                    return cast(T, default_value)
-                else:
+                if isinstance(default_value, DefaultMarker):
                     return FactCore[T].default()
+                else:
+                    return default_value
 
             @override
             @classmethod
