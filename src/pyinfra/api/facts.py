@@ -142,35 +142,35 @@ def fact(
                     if "host" in call_kwargs:
                         raise TypeError("host cannot be provided as a keyword argument")
 
-                def is_positional(param: inspect.Parameter) -> bool:
-                    return param.kind in (
+                positional_parameters = [
+                    name
+                    for name, candidate in parameters.items()
+                    if candidate.kind
+                    in (
                         inspect.Parameter.POSITIONAL_ONLY,
                         inspect.Parameter.POSITIONAL_OR_KEYWORD,
                     )
+                ]
 
-                if "state" in parameters:
-                    if is_positional(parameters["state"]):
-                        positional_parameters = [
-                            name
-                            for name, candidate in parameters.items()
-                            if is_positional(candidate)
-                        ]
-                        position = positional_parameters.index("state")
-                        call_args.insert(position, state)
-                    else:
-                        call_kwargs["state"] = state
+                to_insert: list[tuple[int, str, object]] = []
+                for name, obj in [
+                    ("state", state),
+                    ("host", host),
+                ]:
+                    if name in parameters:
+                        if name in positional_parameters:
+                            position = positional_parameters.index(name)
+                            to_insert.append((position, name, obj))
+                        else:
+                            call_kwargs[name] = obj
 
-                if "host" in parameters:
-                    if is_positional(parameters["host"]):
-                        positional_parameters = [
-                            name
-                            for name, candidate in parameters.items()
-                            if is_positional(candidate)
-                        ]
-                        position = positional_parameters.index("host")
-                        call_args.insert(position, host)
+                no_skip = True
+                for index, name, obj in sorted(to_insert):
+                    if no_skip and index <= len(call_args):
+                        call_args.insert(index, obj)
                     else:
-                        call_kwargs["host"] = host
+                        no_skip = False
+                        call_kwargs[name] = obj
 
                 bound_arguments = sig.bind(*call_args, **call_kwargs)
                 return fact_func(*bound_arguments.args, **bound_arguments.kwargs)

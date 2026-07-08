@@ -617,8 +617,7 @@ class TestHostDecoratorFactsApi(PatchSSHTestCase):
             return arg1
 
         assert _host_get_fact(fact_with_arg_mixed, fake_arg) is fake_arg
-        with self.assertRaises(TypeError):
-            _host_get_fact(fact_with_arg_mixed, arg1=fake_arg)
+        assert _host_get_fact(fact_with_arg_mixed, arg1=fake_arg) is fake_arg
 
         @fact()
         def fact_with_arg_mixed_positional(host, arg1, state, /):
