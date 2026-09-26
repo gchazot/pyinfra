@@ -83,6 +83,12 @@ class FactCore(Generic[T]):
     ) -> T:
         raise NotImplementedError
 
+    @override
+    def __init_subclass__(cls) -> None:
+        super().__init_subclass__()
+        module_name = cls.__module__.replace("pyinfra.facts.", "")
+        cls.name = f"{module_name}.{cls.__name__}"
+
 
 P = ParamSpec("P")
 
@@ -223,8 +229,6 @@ class FactBase(FactCore[T]):
     @override
     def __init_subclass__(cls) -> None:
         super().__init_subclass__()
-        module_name = cls.__module__.replace("pyinfra.facts.", "")
-        cls.name = f"{module_name}.{cls.__name__}"
 
         # Check that fact's `command` method does not inadvertently take a global
         # argument, most commonly `name`.
@@ -480,12 +484,6 @@ class FactBase(FactCore[T]):
 class ShortFactBase(FactCore[T]):
     name: str
     fact: type[FactBase]
-
-    @override
-    def __init_subclass__(cls) -> None:
-        super().__init_subclass__()
-        module_name = cls.__module__.replace("pyinfra.facts.", "")
-        cls.name = f"{module_name}.{cls.__name__}"
 
     @override
     @classmethod
