@@ -36,6 +36,7 @@ from pyinfra.context import ctx_host, ctx_state
 from pyinfra.progress import progress_spinner
 
 from .arguments import CONNECTOR_ARGUMENT_KEYS, AllArguments
+
 if TYPE_CHECKING:
     from pyinfra.api import Host, State
 
@@ -303,10 +304,28 @@ class FactBase(FactCore[T]):
             )
 
         if executor_kwargs.get("_su_user"):
-            for index, line in enumerate(output.stdout_lines):
-                if _SU_OUTPUT_MARKER in line:
-                    stdout_lines = output.stdout_lines[index:].copy()
-                    stdout_lines[0] = line.split(_SU_OUTPUT_MARKER, 1)[1]
+            for index, line in enumerate(output.combined_lines):
+                if _SU_OUTPUT_MARKER in line.line:
+                    logger.debug(
+                        "Removing %s from output %s", _SU_OUTPUT_MARKER, output.combined_lines
+                    )
+                    before_lines = [
+                        line
+                        for line in output.combined_lines[:index]
+                        if line.buffer_name != "stdout"
+                    ]
+                    line.line = line.line.split(_SU_OUTPUT_MARKER, 1)[1]
+                    after_lines = output.combined_lines[index + 1 :].copy()
+
+                    output.combined_lines = [
+                        *before_lines,
+                        line,
+                        *after_lines,
+                    ]
+                    logger.debug(
+                        "Removed %s from output %s", _SU_OUTPUT_MARKER, output.combined_lines
+                    )
+
                     break
 
         # Detect the "binary absent" sentinel from the if/then/else shell guard.
