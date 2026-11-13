@@ -8,10 +8,12 @@ class TestFactDecorator(unittest.TestCase):
     def test_fact_metadata(self):
         @fact()
         def basic_fact() -> str:
+            """A simple test fact"""
             return "hello"
 
         assert basic_fact.abstract is False
-        assert basic_fact.name == "basic_fact"
+        assert basic_fact.name == f"{self.__module__}.basic_fact"
+        assert basic_fact.__doc__ == "A simple test fact"
 
     def test_default_default_is_None(self):
         @fact()

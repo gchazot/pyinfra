@@ -182,7 +182,8 @@ def fact(
                 bound_arguments = sig.bind(*call_args, **call_kwargs)
                 return fact_func(*bound_arguments.args, **bound_arguments.kwargs)
 
-        DecoratedFact.name = fact_func.__name__
+        module_name = fact_func.__module__.replace("pyinfra.facts.", "")
+        DecoratedFact.name = f"{module_name}.{fact_func.__name__}"
         DecoratedFact.__doc__ = fact_func.__doc__
 
         return DecoratedFact()
